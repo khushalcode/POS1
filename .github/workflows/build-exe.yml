@@ -1,0 +1,82 @@
+name: Build Windows .exe
+
+# ─────────────────────────────────────────────────────────────
+# Builds the ServingSync POS Windows installer (.exe) using
+# electron-builder. Runs on every push to main, on PRs, and
+# supports manual triggers.
+# ─────────────────────────────────────────────────────────────
+
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+    paths:
+      - 'src/**'
+      - 'electron/**'
+      - 'public/**'
+      - 'prisma/**'
+      - 'scripts/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'next.config.ts'
+      - '.github/workflows/build-exe.yml'
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:        # manual trigger from GitHub Actions tab
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Windows .ico icon
+        run: node scripts/gen-icon.js
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Build Next.js (standalone)
+        run: npm run build
+        env:
+          # Skip env validation if your build expects secrets
+          SKIP_ENV_VALIDATION: 'true'
+
+      - name: Build Electron .exe installer
+        run: npx electron-builder --win --x64
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # needed if --publish is set
+
+      - name: Upload .exe artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: servingsync-windows-exe
+          path: |
+            release/*.exe
+            release/win-unpacked/ServingSync POS.exe
+          if-no-files-found: error
+          retention-days: 30
+
+      # ─── Optional: attach to GitHub Release when building a tag ───
+      - name: Attach .exe to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/*.exe
+          draft: true
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

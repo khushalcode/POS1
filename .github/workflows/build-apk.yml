@@ -1,0 +1,112 @@
+name: Build Android APK
+
+# ─────────────────────────────────────────────────────────────
+# Builds the ServingSync POS Android APK using Capacitor.
+#
+# PREREQUISITES (one-time setup in your repo):
+#   1. Switch Next.js to static export in next.config.ts:
+#        export: 'export'   (replace `output: 'standalone'`)
+#   2. Install Capacitor:
+#        npm i @capacitor/core @capacitor/cli @capacitor/android
+#   3. Initialize Capacitor:
+#        npx cap init ServingSyncPOS com.servingsync.pos --web-dir=out
+#        npx cap add android
+#   4. Commit the generated `android/` folder and capacitor.config.ts
+#
+# After that, this workflow will produce a signed APK on every run.
+# ─────────────────────────────────────────────────────────────
+
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+    paths:
+      - 'src/**'
+      - 'public/**'
+      - 'prisma/**'
+      - 'scripts/**'
+      - 'android/**'
+      - 'capacitor.config.*'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'next.config.ts'
+      - '.github/workflows/build-apk.yml'
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Setup Java JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: |
+            platforms;android-34
+            build-tools;34.0.0
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Build Next.js static export
+        run: npx next build
+        env:
+          SKIP_ENV_VALIDATION: 'true'
+          # Next.js static export requires the next.config.ts to have:
+          #   output: 'export'
+          # The output will land in ./out
+
+      - name: Sync Capacitor (copy web assets to android/)
+        run: npx cap sync android
+
+      - name: Make gradlew executable
+        run: chmod +x ./android/gradlew
+
+      # ─── Build debug APK by default (no signing setup required) ───
+      # For a release (signed) APK you'd need to configure a keystore
+      # and set ANDROID_KEYSTORE_BASE64 / ANDROID_KEYSTORE_PASSWORD
+      # secrets in GitHub → Settings → Secrets and variables → Actions.
+      - name: Build debug APK
+        run: |
+          cd android
+          ./gradlew assembleDebug --no-daemon
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: servingsync-android-apk
+          path: android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      # ─── Optional: attach to GitHub Release when building a tag ───
+      - name: Attach APK to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: android/app/build/outputs/apk/debug/*.apk
+          draft: true
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

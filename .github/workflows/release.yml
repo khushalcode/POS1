@@ -1,0 +1,179 @@
+name: Release (Build .exe + APK)
+
+# ─────────────────────────────────────────────────────────────
+# Combined release workflow — builds BOTH the Windows .exe and
+# the Android APK in parallel, then attaches them to a GitHub
+# Release.
+#
+# Trigger: push a git tag like `v1.0.0` to your repository:
+#   git tag v1.0.0
+#   git push origin v1.0.0
+#
+# This will:
+#   1. Create a draft GitHub Release with the tag name
+#   2. Build the .exe on Windows runner
+#   3. Build the APK on Ubuntu runner
+#   4. Attach both artifacts to the Release
+#   5. Leave the Release in draft — you publish it manually
+# ─────────────────────────────────────────────────────────────
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v1.0.0)'
+        required: true
+        default: 'v0.0.0'
+
+permissions:
+  contents: write        # needed to create the GitHub Release
+
+jobs:
+  # ═══════════════════════════════════════════════════════════
+  #  JOB 1: Windows .exe
+  # ═══════════════════════════════════════════════════════════
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Windows .ico icon
+        run: node scripts/gen-icon.js
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Build Next.js (standalone)
+        run: npm run build
+        env:
+          SKIP_ENV_VALIDATION: 'true'
+
+      - name: Build Electron .exe installer
+        run: npx electron-builder --win --x64
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload .exe artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-windows-exe
+          path: release/*.exe
+          if-no-files-found: error
+          retention-days: 7
+
+  # ═══════════════════════════════════════════════════════════
+  #  JOB 2: Android APK
+  # ═══════════════════════════════════════════════════════════
+  build-android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Setup Java JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: |
+            platforms;android-34
+            build-tools;34.0.0
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Build Next.js static export
+        run: npx next build
+        env:
+          SKIP_ENV_VALIDATION: 'true'
+
+      - name: Sync Capacitor
+        run: npx cap sync android
+
+      - name: Make gradlew executable
+        run: chmod +x ./android/gradlew
+
+      - name: Build debug APK
+        run: |
+          cd android
+          ./gradlew assembleDebug --no-daemon
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-android-apk
+          path: android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 7
+
+  # ═══════════════════════════════════════════════════════════
+  #  JOB 3: Create GitHub Release and attach both artifacts
+  # ═══════════════════════════════════════════════════════════
+  release:
+    needs: [build-windows, build-android]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Windows .exe artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: release-windows-exe
+          path: ./release-assets
+
+      - name: Download Android APK artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: release-android-apk
+          path: ./release-assets
+
+      - name: List release assets
+        run: ls -la ./release-assets
+
+      - name: Create GitHub Release with assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          name: ${{ github.event.inputs.tag || github.ref_name }}
+          body: |
+            ## ServingSync POS ${{ github.event.inputs.tag || github.ref_name }}
+
+            ### Downloads
+            - **Windows installer (.exe)** — download the `*-Setup.exe` file below
+            - **Android APK** — download the `*.apk` file below
+
+            ### Install
+            - **Windows:** Double-click the .exe and follow the installer
+            - **Android:** Allow "Install from unknown sources" and tap the .apk
+
+            ### First launch
+            - License key required (configured during onboarding)
+            - Default login: `super@servingsync.com` / `admin123`
+          draft: true
+          prerelease: false
+          files: ./release-assets/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
