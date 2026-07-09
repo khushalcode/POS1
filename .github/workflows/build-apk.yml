@@ -71,8 +71,6 @@ jobs:
         run: npx next build
         env:
           SKIP_ENV_VALIDATION: 'true'
-          BUILD_MODE: 'apk'
-          BUILD_MODE: 'apk'
           # Next.js static export requires the next.config.ts to have:
           #   output: 'export'
           # The output will land in ./out
