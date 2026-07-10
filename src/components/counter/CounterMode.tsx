@@ -664,8 +664,8 @@ export default function CounterMode({ onExit, directMode, currentMode, onNavigat
             )}
           </div>
 
-          {/* Action buttons — 3 columns: Save, Send KOT, Generate Bill */}
-          <div className="grid grid-cols-3 gap-2">
+          {/* Action buttons — 3 columns: Save, Send KOT, Generate Bill (desktop only; mobile uses sticky bottom bar below) */}
+          <div className="hidden lg:grid grid-cols-3 gap-2">
             <Button
               onClick={saveOrder}
               disabled={!order || (order.items || []).length === 0 || busy}
